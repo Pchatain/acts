@@ -27,6 +27,18 @@ void FW::FakeRatePlotTool::book(
   PlotHelpers::Binning bNum = m_cfg.varBinning.at("Num");
   ACTS_DEBUG("Initialize the histograms for fake rate plots");
 
+  // number of truth matched seeds
+  fakeRatePlotCache.petersHist =
+      new TH1D("petersHist", "nTruthMatched_peters", 25, 0, 25);
+  // total number of particles found vs pT denominator in seeding efficiency
+  fakeRatePlotCache.nFindablePrts_vs_pT = new TH1F(
+      "nFindablePrts_vs_pT", "Number of particles findable", 40, 0, 100);
+  fakeRatePlotCache.nFindablePrts_vs_eta = new TH1F(
+      "nFindablePrts_vs_eta", "Number of particles findable", 40, -4, 4);
+  fakeRatePlotCache.nPrtsFound_vs_pT =
+      new TH1F("nPrtsFound_vs_pT", "Number of particles found", 40, 0, 100);
+  fakeRatePlotCache.nPrtsFound_vs_eta =
+      new TH1F("nPrtsFound_vs_eta", "Number of particles found", 40, -4, 4);
   // number of reco tracks vs pT scatter plots
   fakeRatePlotCache.nReco_vs_pT = PlotHelpers::bookHisto(
       "nRecoTracks_vs_pT", "Number of reconstructed track candidates", bPt,
@@ -72,11 +84,17 @@ void FW::FakeRatePlotTool::clear(FakeRatePlotCache& fakeRatePlotCache) const {
   delete fakeRatePlotCache.fakeRate_vs_pT;
   delete fakeRatePlotCache.fakeRate_vs_eta;
   delete fakeRatePlotCache.fakeRate_vs_phi;
+  delete fakeRatePlotCache.petersHist;
+  delete fakeRatePlotCache.nFindablePrts_vs_pT;
+  delete fakeRatePlotCache.nFindablePrts_vs_eta;
+  delete fakeRatePlotCache.nPrtsFound_vs_pT;
+  delete fakeRatePlotCache.nPrtsFound_vs_eta;
 }
 
 void FW::FakeRatePlotTool::write(
     const FakeRatePlotTool::FakeRatePlotCache& fakeRatePlotCache) const {
   ACTS_DEBUG("Write the plots to output file.");
+  fakeRatePlotCache.petersHist->Write();
   fakeRatePlotCache.nReco_vs_pT->Write();
   fakeRatePlotCache.nTruthMatched_vs_pT->Write();
   fakeRatePlotCache.nFake_vs_pT->Write();
@@ -86,6 +104,10 @@ void FW::FakeRatePlotTool::write(
   fakeRatePlotCache.fakeRate_vs_pT->Write();
   fakeRatePlotCache.fakeRate_vs_eta->Write();
   fakeRatePlotCache.fakeRate_vs_phi->Write();
+  fakeRatePlotCache.nFindablePrts_vs_pT->Write();
+  fakeRatePlotCache.nFindablePrts_vs_eta->Write();
+  fakeRatePlotCache.nPrtsFound_vs_pT->Write();
+  fakeRatePlotCache.nPrtsFound_vs_eta->Write();
 }
 
 void FW::FakeRatePlotTool::fill(
@@ -107,7 +129,13 @@ void FW::FakeRatePlotTool::fill(
     size_t nFakeTracks) const {
   const auto t_eta = eta(truthParticle.unitDirection());
   const auto t_pT = truthParticle.transverseMomentum();
-
+  if (nTruthMatchedTracks > 0) {
+    fakeRatePlotCache.nPrtsFound_vs_pT->Fill(t_pT, 1);
+    fakeRatePlotCache.nPrtsFound_vs_eta->Fill(t_eta, 1);
+  }
+  fakeRatePlotCache.petersHist->Fill(nTruthMatchedTracks, 1);
+  fakeRatePlotCache.nFindablePrts_vs_pT->Fill(t_pT, 1);
+  fakeRatePlotCache.nFindablePrts_vs_eta->Fill(t_eta, 1);
   PlotHelpers::fillHisto(fakeRatePlotCache.nReco_vs_pT, t_pT,
                          nTruthMatchedTracks + nFakeTracks);
   PlotHelpers::fillHisto(fakeRatePlotCache.nTruthMatched_vs_pT, t_pT,

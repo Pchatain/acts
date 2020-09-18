@@ -49,6 +49,14 @@ class FakeRatePlotTool {
     TEfficiency* fakeRate_vs_pT;   ///< Tracking fake rate vs pT
     TEfficiency* fakeRate_vs_eta;  ///< Tracking fake rate vs eta
     TEfficiency* fakeRate_vs_phi;  ///< Tracking fake rate vs phi
+    TH1D* petersHist;  // histogram of the number of times the particle was
+                       // identified by a seed
+    TH1F* nFindablePrts_vs_pT;   // histogram displaying how many particles were
+                                 // findable vs pT
+    TH1F* nFindablePrts_vs_eta;  // histogram displaying how many particles were
+                                 // findable vs eta
+    TH1F* nPrtsFound_vs_pT;
+    TH1F* nPrtsFound_vs_eta;
   };
 
   /// Constructor

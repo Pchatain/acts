@@ -12,6 +12,10 @@
 #include <numeric>
 #include <type_traits>
 
+#include <fstream>
+#include <iostream>
+#include <sstream>
+
 namespace Acts {
 
 template <typename external_spacepoint_t, typename platform_t>
@@ -39,6 +43,8 @@ template <typename sp_range_t>
 std::vector<Seed<external_spacepoint_t>>
 Seedfinder<external_spacepoint_t, platform_t>::createSeedsForGroup(
     sp_range_t bottomSPs, sp_range_t middleSPs, sp_range_t topSPs) const {
+          size_t print1 = 0;
+    size_t print2 = 0;
   std::vector<Seed<external_spacepoint_t>> outputVec;
   for (auto spM : middleSPs) {
     float rM = spM->radius();
@@ -125,6 +131,7 @@ Seedfinder<external_spacepoint_t, platform_t>::createSeedsForGroup(
     size_t numBotSP = compatBottomSP.size();
     size_t numTopSP = compatTopSP.size();
 
+
     for (size_t b = 0; b < numBotSP; b++) {
       auto lb = linCircleBottom[b];
       float Zob = lb.Zo;
@@ -199,7 +206,13 @@ Seedfinder<external_spacepoint_t, platform_t>::createSeedsForGroup(
         // sqrt(S2)/B = 2 * helixradius
         // calculated radius must not be smaller than minimum radius
         if (S2 < B2 * m_config.minHelixDiameter2) {
+                    if (print1 < 1) {
+          //std::cout << "Momentum cut " << 2 * m_config.pTPerHelixRadius / std::sqrt(B2/S2) << std::endl;
+           print1++; }
           continue;
+        } else if (print2 < 1) {
+          //std::cout << "Momentum kept " << 2 * m_config.pTPerHelixRadius / std::sqrt(B2/S2) << std::endl; 
+          print2++; 
         }
         // 1/helixradius: (B/sqrt(S2))/2 (we leave everything squared)
         float iHelixDiameter2 = B2 / S2;
@@ -210,11 +223,11 @@ Seedfinder<external_spacepoint_t, platform_t>::createSeedsForGroup(
         // from rad to deltaCotTheta
         float p2scatter = pT2scatter * iSinTheta2;
         // if deltaTheta larger than allowed scattering for calculated pT, skip
-        if ((deltaCotTheta2 - error2 > 0) &&
+        if ((2 * m_config.pTPerHelixRadius * std::sqrt(S2) < m_config.maxPt * B) && (deltaCotTheta2 - error2 > 0) &&
             (dCotThetaMinusError2 >
              p2scatter * m_config.sigmaScattering * m_config.sigmaScattering)) {
           continue;
-        }
+        } 
         // A and B allow calculation of impact params in U/V plane with linear
         // function
         // (in contrast to having to solve a quadratic function in x/y plane)

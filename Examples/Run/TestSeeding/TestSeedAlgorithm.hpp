@@ -14,6 +14,7 @@
 #include "Acts/Plugins/Digitization/PlanarModuleCluster.hpp"
 #include "Acts/Seeding/InternalSeed.hpp"
 #include "Acts/Seeding/InternalSpacePoint.hpp"
+#include "Acts/Seeding/Seedfinder.hpp"
 #include "Acts/Seeding/SpacePoint.hpp"
 #include "ActsFatras/EventData/Barcode.hpp"
 
@@ -42,6 +43,10 @@ class TestSeedAlgorithm : public FW::BareAlgorithm {
     std::string outputSeeds;
     // output seeds in proto track form
     std::string outputProtoSeeds;
+    // Read in seed finder config
+    Acts::SeedfinderConfig<SpacePoint> seedFinderCfg;
+    // Controls whether to print out ML friendly output
+    bool outputIsML = false;
   };
 
   TestSeedAlgorithm(const Config& cfg, Acts::Logging::Level level);

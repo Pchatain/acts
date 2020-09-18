@@ -83,8 +83,8 @@ SpacePoint* FW::TestSeedAlgorithm::readSP(
   y = globalPos.y();
   z = globalPos.z();
   r = std::sqrt(x * x + y * y);
-  varianceR = 0;  // initialized to 0 becuse they don't affect seeds generated
-  varianceZ = 0;  // initialized to 0 becuse they don't affect seeds generated
+  varianceR = 0;  // why these values?
+  varianceZ = 0;
 
   // get truth particles that are a part of this space point
   std::vector<FW::ParticleHitCount> particleHitCount;
@@ -129,9 +129,9 @@ FW::ProcessCode FW::TestSeedAlgorithm::execute(
   const HitParticlesMap hitParticlesMap =
       ctx.eventStore.get<HitParticlesMap>(m_cfg.inputHitParticlesMap);
   const auto& particleHitsMap = invertIndexMultimap(hitParticlesMap);
-  // read in particles so we can make proto seeds
+  /*
   const auto& particles =
-      ctx.eventStore.get<SimParticleContainer>(m_cfg.inputParticles);
+      ctx.eventStore.get<SimParticleContainer>(m_cfg.inputParticles);*/
 
   std::size_t nHitsTotal = hitParticlesMap.size();
 
@@ -151,7 +151,7 @@ FW::ProcessCode FW::TestSeedAlgorithm::execute(
 
     // filter out hits that aren't part of the volumes and layers track seeding
     // is supposed to work on.
-    if (volumeId == 8 && 2 <= layerId && layerId <= 6) {
+    if (volumeId == 8) {
       SpacePoint* SP = readSP(hit_id, geoId, cluster, hitParticlesMap, ctx);
       spVec.push_back(SP);
       clustCounter++;
@@ -163,31 +163,42 @@ FW::ProcessCode FW::TestSeedAlgorithm::execute(
   }
 
   // set up the cuts applied to seed finder algorithm
-  Acts::SeedfinderConfig<SpacePoint> config;
+  Acts::SeedfinderConfig<SpacePoint> config = m_cfg.seedFinderCfg; /*
   // silicon detector max
-  config.rMax = 160.;  // original 160
-  config.deltaRMin = 5.;
-  config.deltaRMax = 160.;
+  ACTS_INFO("The minPt passed in is " << m_cfg.seedFinderCfg.minPt)
+  config.rMax = 200;  // 200
+  config.deltaRMin = 1.;
+  config.deltaRMax = 80.;  // 160
   config.collisionRegionMin = -250.;
   config.collisionRegionMax = 250.;
-  config.zMin = -3000.;       // -2800
-  config.zMax = 3000.;        // 2800
-  config.maxSeedsPerSpM = 1;  // 5
+  config.zMin = -2000.;       // -2800 affects numbber of bins
+  config.zMax = 2000.;        // 2800
+  config.maxSeedsPerSpM = 5;  // 5 treated as +1 by seedFilter.ipp
   // 2.7 eta
-  config.cotThetaMax = 7.40627;  // 7.40627
-  config.sigmaScattering = 1.00000;
+  config.cotThetaMax = 7.40627;   // 7.40627. so far no effect on performance
+  config.sigmaScattering = 2.25;  // better efficiency, more duplicates
+  config.radLengthPerSeed = 0.1;  // default 0.05
 
-  config.minPt = 500.;
+  config.minPt = m_cfg.seedFinderCfg.minPt;
   config.bFieldInZ = 0.00199724;  // 0.00199724
 
-  config.beamPos = {0, 0};  // {-.5, -.5}
-  config.impactMax = 10.;   // 10
-
+  config.beamPos = {0, 0};  // {-.5, -.5} worse performance on {-.5, -.5}
+  config.impactMax =
+      3;  // 10 at 15 very minor increase found in raw eff, none in eff
+*/
   auto bottomBinFinder = std::make_shared<Acts::BinFinder<SpacePoint>>(
       Acts::BinFinder<SpacePoint>());
   auto topBinFinder = std::make_shared<Acts::BinFinder<SpacePoint>>(
       Acts::BinFinder<SpacePoint>());
   Acts::SeedFilterConfig sfconf;
+  sfconf.maxSeedsPerSpM = config.maxSeedsPerSpM;
+  // sfconf default values listed here
+  // maxSeedsPerSpM = 10
+  // compatSeedLimit = 2;
+  // sfconf.deltaRMin = config.deltaRMin;
+  // compatSeedWeight = 200.;
+  // impactWeightFactor = 1.;
+  // deltaInvHelixDiameter = 0.00003;
   Acts::ATLASCuts<SpacePoint> atlasCuts = Acts::ATLASCuts<SpacePoint>();
   config.seedFilter = std::make_unique<Acts::SeedFilter<SpacePoint>>(
       Acts::SeedFilter<SpacePoint>(sfconf, &atlasCuts));
@@ -211,27 +222,38 @@ FW::ProcessCode FW::TestSeedAlgorithm::execute(
   // create grid with bin sizes according to the configured geometry
   std::unique_ptr<Acts::SpacePointGrid<SpacePoint>> grid =
       Acts::SpacePointGridCreator::createGrid<SpacePoint>(gridConf);
+  ACTS_DEBUG("We are about to make the grid")
   auto spGroup = Acts::BinnedSPGroup<SpacePoint>(spVec.begin(), spVec.end(), ct,
                                                  bottomBinFinder, topBinFinder,
                                                  std::move(grid), config);
-
+  ACTS_DEBUG("We made the grid")
   std::vector<std::vector<Acts::Seed<SpacePoint>>> seedVector;
+  ACTS_DEBUG("Briana")
   auto start = std::chrono::system_clock::now();
   auto groupIt = spGroup.begin();
   auto endOfGroups = spGroup.end();
-
-  // actually executues the seed finding algoirthm here
-  for (; !(groupIt == endOfGroups); ++groupIt) {
-    seedVector.push_back(a.createSeedsForGroup(
-        groupIt.bottom(), groupIt.middle(), groupIt.top()));
+  if (groupIt == endOfGroups) {
+    ACTS_DEBUG("The grid is empty")
+  } else {
+    ACTS_DEBUG("Now we execute seed finding algorithm")
+    // actually executues the seed finding algoirthm here
+    for (; !(groupIt == endOfGroups); ++groupIt) {
+      seedVector.push_back(a.createSeedsForGroup(
+          groupIt.bottom(), groupIt.middle(), groupIt.top()));
+    }
   }
   auto end = std::chrono::system_clock::now();
   std::chrono::duration<double> elapsed_seconds = end - start;
-  ACTS_INFO("Time to create seeds: " << elapsed_seconds.count() << "s")
-  ACTS_INFO("Number of regions: " << seedVector.size())
-  ACTS_INFO("Number of hits used is: " << clustCounter << " --- "
-                                       << 100 * clustCounter / nHitsTotal
-                                       << "% usage")  // some of the hits
+  if (m_cfg.outputIsML) {
+    std::cout << "mlTag"
+              << "time" << elapsed_seconds.count() << std::endl;
+  } else {
+    ACTS_INFO("Time to create seeds: " << elapsed_seconds.count() << "s")
+    ACTS_DEBUG("Number of regions: " << seedVector.size())
+    ACTS_INFO("Number of hits used is: " << clustCounter << " --- "
+                                         << 100 * clustCounter / nHitsTotal
+                                         << "% usage")  // some of the hits
+  }
 
   ProtoTrackContainer seeds;
   seeds.reserve(seedVector.size());
@@ -242,6 +264,12 @@ FW::ProcessCode FW::TestSeedAlgorithm::execute(
       ProtoTrack track = seedToProtoTrack(seed);
       seeds.emplace_back(std::move(track));
     }
+  }
+  if (seeds.empty()) {
+    ACTS_DEBUG("seeds are empty")
+  }
+  if (seedVector.empty()) {
+    ACTS_DEBUG("Seed vector is empty")
   }
   // store proto tracks to be analyzed by TrackFindingPerforrmanceWriter
   ctx.eventStore.add(m_cfg.outputProtoSeeds, std::move(seeds));

@@ -11,14 +11,18 @@
 #include "ACTFW/EventData/GeometryContainers.hpp"
 #include "ACTFW/EventData/IndexContainers.hpp"
 #include "ACTFW/EventData/ProtoTrack.hpp"
+#include "ACTFW/EventData/SimMultiTrajectory.hpp"
 #include "ACTFW/EventData/SimParticle.hpp"
 #include "ACTFW/Utilities/Paths.hpp"
 #include "ACTFW/Utilities/Range.hpp"
 #include "ACTFW/Validation/ProtoTrackClassification.hpp"
+#include "Acts/EventData/MultiTrajectoryHelpers.hpp"
+#include "Acts/EventData/TrackParameters.hpp"
 #include "Acts/Plugins/Digitization/PlanarModuleCluster.hpp"
 #include "Acts/Seeding/Seed.hpp"
 #include "Acts/Seeding/SpacePoint.hpp"
 #include "Acts/Utilities/Units.hpp"
+#include "Acts/Utilities/detail/periodic.hpp"
 #include <Acts/Utilities/Helpers.hpp>
 
 #include <algorithm>
@@ -101,7 +105,9 @@ struct FW::TrackSeedingPerformanceWriter::Impl {
     if (cfg.outputFilename.empty()) {
       throw std::invalid_argument("Missing output filename");
     }
-
+    if (cfg.outputIsML) {
+      return;
+    }
     // the output file can not be given externally since TFile accesses to the
     // same file from multiple threads are unsafe.
     // must always be opened internally
@@ -148,6 +154,9 @@ struct FW::TrackSeedingPerformanceWriter::Impl {
   void write(uint64_t eventId, const SimParticleContainer& particles,
              const HitParticlesMap& hitParticlesMap,
              const ProtoTrackContainer& seeds) {
+    if (cfg.outputIsML) {
+      return;
+    }
     // compute the inverse mapping on-the-fly
     const auto& particleHitsMap = invertIndexMultimap(hitParticlesMap);
     // How often a particle was reconstructed.
@@ -207,6 +216,10 @@ struct FW::TrackSeedingPerformanceWriter::Impl {
     {
       std::lock_guard<std::mutex> guardPrt(trkMutex);
       for (const auto& particle : particles) {
+        /*const auto prtPointer = particles.find(particle);
+        if (!prtFindable(*prtPointer)) {
+          continue;
+        }*/
         // find all hits for this particle
         auto hits =
             makeRange(particleHitsMap.equal_range(particle.particleId()));
@@ -240,6 +253,9 @@ struct FW::TrackSeedingPerformanceWriter::Impl {
   }
   /// Write everything to disk and close the file.
   void close() {
+    if (cfg.outputIsML) {
+      return;
+    }
     if (not file) {
       ACTS_ERROR("Output file is not available");
       return;
@@ -254,7 +270,8 @@ FW::TrackSeedingPerformanceWriter::TrackSeedingPerformanceWriter(
     : WriterT(cfg.inputSeeds, "TrackSeedingPerformanceWriter", lvl),
       m_impl(std::make_unique<Impl>(std::move(cfg), logger())),
       m_fakeRatePlotTool(m_impl->cfg.fakeRatePlotConfig, lvl),
-      m_effPlotTool(m_impl->cfg.effPlotToolConfig, lvl) {
+      m_effPlotTool(m_impl->cfg.effPlotToolConfig, lvl),
+      m_trackSummaryPlotTool(m_cfg.trackSummaryPlotToolConfig, lvl) {
   // Input track and truth collection name
   if (m_impl->cfg.inputSeeds.empty()) {
     throw std::invalid_argument("Missing input seeds collection");
@@ -266,6 +283,9 @@ FW::TrackSeedingPerformanceWriter::TrackSeedingPerformanceWriter(
     throw std::invalid_argument("Missing output filename");
   }
 
+  if (m_impl->cfg.outputIsML) {
+    return;
+  }
   // the output file can not be given externally since TFile accesses to the
   // same file from multiple threads are unsafe.
   // must always be opened internally
@@ -278,11 +298,16 @@ FW::TrackSeedingPerformanceWriter::TrackSeedingPerformanceWriter(
   // initialize the efficiency plots tool
   m_effPlotTool.book(m_effPlotCache);
   m_fakeRatePlotTool.book(m_fakeRatePlotCache);
+  m_trackSummaryPlotTool.book(m_trackSummaryPlotCache);
 }
 
 FW::TrackSeedingPerformanceWriter::~TrackSeedingPerformanceWriter() {
+  if (m_impl->cfg.outputIsML) {
+    return;
+  }
   m_effPlotTool.clear(m_effPlotCache);
   m_fakeRatePlotTool.clear(m_fakeRatePlotCache);
+  m_trackSummaryPlotTool.clear(m_trackSummaryPlotCache);
 
   if (m_outputFile) {
     m_outputFile->Close();
@@ -290,10 +315,14 @@ FW::TrackSeedingPerformanceWriter::~TrackSeedingPerformanceWriter() {
 }
 
 FW::ProcessCode FW::TrackSeedingPerformanceWriter::endRun() {
+  if (m_impl->cfg.outputIsML) {
+    return ProcessCode::SUCCESS;
+  }
   if (m_outputFile) {
     m_outputFile->cd();
     m_effPlotTool.write(m_effPlotCache);
     m_fakeRatePlotTool.write(m_fakeRatePlotCache);
+    m_trackSummaryPlotTool.write(m_trackSummaryPlotCache);
 
     ACTS_INFO("Wrote performance plots to '" << m_outputFile->GetPath() << "'");
   }
@@ -355,9 +384,10 @@ bool FW::TrackSeedingPerformanceWriter::prtFindable(
   };
 
   auto prtHits = makeRange(particleHitsMap.equal_range(prt.particleId()));
-  bool hasBottomSP = false;
-  bool hasMiddleSP = false;
-  bool hasTopSP = false;
+  bool hasOuterHit = false;
+  size_t innerHitCount = 0;
+  bool hasGreenHit = false;
+
   for (const auto& prtHit : prtHits) {
     size_t hit_id = prtHit.second;
     const auto& entry = clusters.begin() + hit_id;  // hit_id is 0-indexed
@@ -367,19 +397,16 @@ bool FW::TrackSeedingPerformanceWriter::prtFindable(
     }
     Acts::GeometryID geoId = entry->first;
     size_t volumeId = geoId.volume();
-    if (volumeId != 8) {
-      continue;
-    }
-    size_t layerId = geoId.layer();
-    if (layerId == 2) {
-      hasBottomSP = true;
-    } else if (layerId == 4) {
-      hasMiddleSP = true;
-    } else if (layerId == 6) {
-      hasTopSP = true;
+    if (12 <= volumeId && volumeId <= 14) {
+      hasOuterHit = true;
+    } else if (16 <= volumeId && volumeId <= 18) {
+      hasGreenHit = true;
+    } else if (volumeId == 8) {
+      innerHitCount++;
     }
   }
-  return hasBottomSP && hasMiddleSP && hasTopSP && isValidparticle(prt);
+  bool has3InnerHit = innerHitCount >= 3;
+  return has3InnerHit && hasGreenHit && hasOuterHit && isValidparticle(prt);
 }
 
 std::set<ActsFatras::Barcode>
@@ -409,7 +436,7 @@ FW::TrackSeedingPerformanceWriter::identifySharedParticles(
   return prtsInCommon;
 }
 
-void FW::TrackSeedingPerformanceWriter::analyzeSeed(
+std::set<ActsFatras::Barcode> FW::TrackSeedingPerformanceWriter::analyzeSeed(
     const Acts::Seed<SpacePoint>* seed, const HitParticlesMap& hitParticlesMap,
     std::unordered_map<ActsFatras::Barcode, std::size_t>& truthCount,
     std::unordered_map<ActsFatras::Barcode, std::size_t>& fakeCount) const {
@@ -428,6 +455,7 @@ void FW::TrackSeedingPerformanceWriter::analyzeSeed(
       it->second += 1;
     }
   }
+  return prtsInCommon;
 }
 
 ProtoTrack FW::TrackSeedingPerformanceWriter::seedToProtoTrack(
@@ -445,62 +473,59 @@ void FW::TrackSeedingPerformanceWriter::writePlots(
     const IndexMultimap<ActsFatras::Barcode>& hitParticlesMap,
     const SimParticleContainer& particles,
     const FW::GeometryIdMultimap<Acts::PlanarModuleCluster>& clusters) {
+  const auto& particleHitsMap = invertIndexMultimap(hitParticlesMap);
   // Exclusive access to the tree while writing
   std::lock_guard<std::mutex> lock(m_writeMutex);
   size_t nSeeds = 0;
-  // Set that helps keep track of the number of duplicate seeds. i.e. if there
-  // are three seeds for one particle, this is counted as two duplicate seeds.
-  std::set<ActsFatras::Barcode> particlesFoundBySeeds;
   // Map from particles to how many times they were successfully found by a seed
   std::unordered_map<ActsFatras::Barcode, std::size_t> truthCount;
   // Map from particles to how many times they were involved in a seed that is
   // fake
   std::unordered_map<ActsFatras::Barcode, std::size_t> fakeCount;
-
+  std::vector<SimMultiTrajectory> parameters;
+  parameters.reserve(particles.size());
   for (auto& regionVec : seedVector) {
     nSeeds += regionVec.size();
     for (size_t i = 0; i < regionVec.size(); i++) {
       const Acts::Seed<SpacePoint>* seed = &regionVec[i];
-      analyzeSeed(seed, hitParticlesMap, truthCount, fakeCount);
+      std::set<ActsFatras::Barcode> prtsInCommon =
+          analyzeSeed(seed, hitParticlesMap, truthCount, fakeCount);
     }
   }
-  const auto& particleHitsMap = invertIndexMultimap(hitParticlesMap);
-  // Fill the effeciency and fake rate plots
-  for (const auto& particle : particles) {
-    const auto it = particlesFoundBySeeds.find(particle.particleId());
-    /*if (!prtFindable(particle.particleId(), particleHitsMap, clusters)) {
-      continue;
-    }*/
-    if (it != particlesFoundBySeeds.end()) {
-      // when the trajectory is reconstructed
-      // 0 particle id means the particle is fake
-      m_effPlotTool.fill(m_effPlotCache, particle, it->particle() != 0);
-    } else {
-      // when the trajectory is NOT reconstructed
-      m_effPlotTool.fill(m_effPlotCache, particle, false);
+  size_t numPtAbove25 = 0;
+  if (!m_impl->cfg.outputIsML) {
+    // Fill the Efficiency and fake rate plots
+    for (const auto& particle : particles) {
+      if (particle.absMomentum() > 10) {
+        numPtAbove25++;
+      }
+      if (!prtFindable(particle, particleHitsMap, clusters)) {
+        continue;
+      }
+      const auto it1 = truthCount.find(particle.particleId());
+      const auto it2 = fakeCount.find(particle.particleId());
+      size_t nTruthMatchedSeeds = (it1 != truthCount.end()) ? it1->second : 0u;
+      size_t nFakeSeeds = (it2 != fakeCount.end()) ? it2->second : 0u;
+      m_fakeRatePlotTool.fill(m_fakeRatePlotCache, particle, nTruthMatchedSeeds,
+                              nFakeSeeds);
+      /// TODO: add the rest of the fake rate plots
+      m_effPlotTool.fill(m_effPlotCache, particle, nTruthMatchedSeeds > 0);
     }
-    const auto it1 = truthCount.find(particle.particleId());
-    const auto it2 = fakeCount.find(particle.particleId());
-    size_t nTruthMatchedSeeds = (it1 != truthCount.end()) ? it1->second : 0u;
-    size_t nFakeSeeds = (it2 != fakeCount.end()) ? it2->second : 0u;
-    m_fakeRatePlotTool.fill(m_fakeRatePlotCache, particle, nTruthMatchedSeeds,
-                            nFakeSeeds);
-    // TODO: add the rest of the fake rate plots
   }
   size_t nTrueSeeds = 0;       // true seed means it contains a particle
   size_t nDuplicateSeeds = 0;  // Number of seeds that re-find a particle
   size_t foundParticles = 0;
-  // Number of particles that we don't expect the seed finder to find
-  size_t qualityCutDenominator = 0;
-  // number of already found particles we don't expect the seed finder to find
-  size_t qualityCutNumerator = 0;
+  // Number of particles we expect the seed finder to find
+  size_t qualityCutPrts = 0;
+  // number of already found particles we expect the seed finder to find
+  size_t qualityCutFoundPrts = 0;
   for (const auto& tc : truthCount) {
     if (tc.second > 0) {
       foundParticles++;
     }
     const auto prtPointer = particles.find(tc.first);
-    if (!prtFindable(*prtPointer, particleHitsMap, clusters)) {
-      qualityCutNumerator++;
+    if (prtFindable(*prtPointer, particleHitsMap, clusters)) {
+      qualityCutFoundPrts++;
     }
     nTrueSeeds += tc.second;
     if (tc.second > 1) {
@@ -509,32 +534,37 @@ void FW::TrackSeedingPerformanceWriter::writePlots(
     }
   }
   for (const auto& particle : particles) {
-    if (!prtFindable(particle, particleHitsMap, clusters)) {
-      qualityCutDenominator++;
+    if (prtFindable(particle, particleHitsMap, clusters)) {
+      qualityCutPrts++;
     }
   }
   size_t nParticles = particles.size();
-  ACTS_INFO("Number of seeds generated: " << nSeeds)
-  ACTS_INFO("Number of true seeds generated: " << nTrueSeeds)
-  ACTS_INFO("Fake rate (nSeeds - nTrueSeeds) / nSeeds --- "
-            << 100 * (nSeeds - nTrueSeeds) / nSeeds << "%")
-  ACTS_INFO("Number of duplicate seeds generated: " << nDuplicateSeeds)
+  if (m_impl->cfg.outputIsML) {
+    std::cout << m_impl->cfg.mlTag << "seeds" << nSeeds << std::endl;
+    std::cout << m_impl->cfg.mlTag << "eff"
+              << (float)(10000 * qualityCutFoundPrts / (qualityCutPrts)) / 100.
+              << std::endl;
+    std::cout << m_impl->cfg.mlTag << "true" << nTrueSeeds << std::endl;
+  } else {
+    ACTS_INFO("Number of seeds generated: " << nSeeds)
+    ACTS_INFO("Number of true seeds generated: " << nTrueSeeds)
 
-  ACTS_INFO("Technical Effeciency (nTrueSeeds - nDuplicateSeeds / nSeeds) --- "
-            << 100 * (nTrueSeeds - nDuplicateSeeds) / nSeeds << "%")
-  ACTS_INFO("Duplicate rate (nDuplicateSeeds / nSeeds) --- "
-            << (100 * nDuplicateSeeds) / nSeeds << "%")
-  ACTS_INFO("Raw Effeciency: (particles matched to truth) / nParticles = "
-            << foundParticles << " / " << nParticles << " = "
-            << 100 * foundParticles / nParticles << "%")
-  ACTS_INFO(
-      "Effeciency (taking into account whether we expect the particle to be "
-      "found) "
-      << foundParticles - qualityCutNumerator << "/"
-      << nParticles - qualityCutDenominator << " = "
-      << 100 * (foundParticles - qualityCutNumerator) /
-             (nParticles - qualityCutDenominator)
-      << "%")
+    ACTS_INFO("Number of duplicate seeds generated: " << nDuplicateSeeds)
+    ACTS_INFO(
+        "Technical Efficiency (nTrueSeeds - nDuplicateSeeds / nSeeds) --- "
+        << 100 * (nTrueSeeds - nDuplicateSeeds) / nSeeds << "%")
+    ACTS_INFO("Raw Efficiency: (particles matched to truth) / nParticles = "
+              << foundParticles << " / " << nParticles << " = "
+              << 100 * foundParticles / nParticles << "%")
+    ACTS_INFO("Fake rate (nSeeds - nTrueSeeds) / nSeeds --- "
+              << (100 * (nSeeds - nTrueSeeds)) / nSeeds << "%")
+    ACTS_INFO("Duplicate rate (nDuplicateSeeds / nSeeds) --- "
+              << (100 * nDuplicateSeeds) / nSeeds << "%")
+    ACTS_INFO("Efficiency "
+              << qualityCutFoundPrts << "/" << qualityCutPrts << " = "
+              << 100 * qualityCutFoundPrts / (qualityCutPrts) << "%")
+    ACTS_DEBUG("Number of particles with absP > 25 = " << numPtAbove25)
+  }
 }
 
 FW::ProcessCode FW::TrackSeedingPerformanceWriter::writeT(
@@ -550,16 +580,25 @@ FW::ProcessCode FW::TrackSeedingPerformanceWriter::writeT(
   // Read in hit to particles map
   const auto& hitParticlesMap =
       ctx.eventStore.get<HitParticlesMap>(m_impl->cfg.inputHitParticlesMap);
-
-  // Write fake rate and efficiency plots
-  writePlots(seedVector, hitParticlesMap, particles, clusters);
-  // Read seeds in as proto tracks
   const auto& protoSeeds =
       ctx.eventStore.get<ProtoTrackContainer>(m_impl->cfg.inputProtoSeeds);
-
-  // Write TTrees for histograms
-  m_impl->write(ctx.eventNumber, particles, hitParticlesMap, protoSeeds);
-  ACTS_INFO("Wrote seed finder performance trees to "
-            << m_impl->file->GetPath())  // This is printing the wrong file name
+  // Write fake rate and efficiency plots
+  if (protoSeeds.size() == 0) {
+    ACTS_DEBUG("ProtoSeeds read in are empty")
+    if (m_impl->cfg.outputIsML) {
+      std::cout << m_impl->cfg.mlTag << "seeds" << 0 << std::endl;
+      std::cout << m_impl->cfg.mlTag << "eff" << 0 << std::endl;
+      std::cout << m_impl->cfg.mlTag << "true" << 0 << std::endl;
+    }
+  } else {
+    writePlots(seedVector, hitParticlesMap, particles, clusters);
+    // Write TTrees for histograms
+    if (!m_cfg.outputIsML) {
+      // Read seeds in as proto tracks
+      m_impl->write(ctx.eventNumber, particles, hitParticlesMap, protoSeeds);
+      ACTS_INFO("Wrote seed finder performance trees to "
+                << m_impl->file->GetPath())
+    }
+  }
   return ProcessCode::SUCCESS;
 }

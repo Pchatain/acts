@@ -54,7 +54,10 @@ class TrackSeedingPerformanceWriter final
     std::string outputDir;
     /// Output filename.
     std::string outputFilename = "performance_track_seeding.root";
-
+    // Controls whether to print out ML friendly output
+    bool outputIsML = false;
+    // Tag for whether a line is ML output
+    std::string mlTag = "mlTag";
     // The quality cuts to be applied when evaluating seed finder efficiency
     /// Maximum distance from the origin in the transverse plane
     double rhoMax = std::numeric_limits<double>::max();
@@ -79,6 +82,7 @@ class TrackSeedingPerformanceWriter final
     /// Plot tool configurations.
     EffPlotTool::Config effPlotToolConfig;
     FakeRatePlotTool::Config fakeRatePlotConfig;
+    TrackSummaryPlotTool::Config trackSummaryPlotToolConfig;
   };
 
   /// @brief Finds all the particles that are in common to all space points in
@@ -106,7 +110,7 @@ class TrackSeedingPerformanceWriter final
   /// @param truthCount map from particles found to how many seeds found them
   /// @param fakeCount map from particles to how many fake seeds they were a
   /// part of
-  void analyzeSeed(
+  std::set<ActsFatras::Barcode> analyzeSeed(
       const Acts::Seed<SpacePoint>* seed,
       const FW::IndexMultimap<ActsFatras::Barcode>& hitParticlesMap,
       std::unordered_map<ActsFatras::Barcode, std::size_t>& truthCount,
@@ -122,6 +126,12 @@ class TrackSeedingPerformanceWriter final
       const IndexMultimap<ActsFatras::Barcode>& hitParticlesMap,
       const SimParticleContainer& particles,
       const FW::GeometryIdMultimap<Acts::PlanarModuleCluster>& clusters);
+
+  //   void analyzeSeeds(
+  //       const std::vector<std::vector<Acts::Seed<SpacePoint>>>& seedVector,
+  //       const IndexMultimap<ActsFatras::Barcode>& hitParticlesMap,
+  //       const SimParticleContainer& particles,
+  //       const FW::GeometryIdMultimap<Acts::PlanarModuleCluster>& clusters);
 
   /// @brief Prints out the 3 space points inide of a seed and relevant
   /// information
@@ -157,6 +167,9 @@ class TrackSeedingPerformanceWriter final
   /// Plot tool for efficiency
   EffPlotTool m_effPlotTool;
   EffPlotTool::EffPlotCache m_effPlotCache;
+  /// Plot tool for track hit info
+  TrackSummaryPlotTool m_trackSummaryPlotTool;
+  TrackSummaryPlotTool::TrackSummaryPlotCache m_trackSummaryPlotCache;
 };
 
 }  // namespace FW

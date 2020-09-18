@@ -6,6 +6,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+#include "ACTFW/Digitization/HitSmearing.hpp"
+#include "ACTFW/Fitting/FittingAlgorithm.hpp"
 #include "ACTFW/Framework/Sequencer.hpp"
 #include "ACTFW/Framework/WhiteBoard.hpp"
 #include "ACTFW/GenericDetector/GenericDetector.hpp"
@@ -16,20 +18,26 @@
 #include "ACTFW/Io/Csv/CsvPlanarClusterReader.hpp"
 #include "ACTFW/Io/Csv/CsvPlanarClusterWriter.hpp"
 #include "ACTFW/Io/Performance/TrackFinderPerformanceWriter.hpp"
+#include "ACTFW/Io/Performance/TrackFitterPerformanceWriter.hpp"
 #include "ACTFW/Io/Performance/TrackSeedingPerformanceWriter.hpp"
+#include "ACTFW/Io/Root/RootTrajectoryWriter.hpp"
 #include "ACTFW/Options/CommonOptions.hpp"
 #include "ACTFW/Plugins/BField/BFieldOptions.hpp"
+#include "ACTFW/TruthTracking/ParticleSmearing.hpp"
 #include "ACTFW/TruthTracking/TruthSeedSelector.hpp"
 #include "ACTFW/TruthTracking/TruthTrackFinder.hpp"
 #include "ACTFW/Utilities/Options.hpp"
 #include "ACTFW/Utilities/Paths.hpp"
+#include "Acts/Seeding/Seedfinder.hpp"
 #include <Acts/Utilities/Units.hpp>
 
 #include <cstdlib>
 #include <memory>
 
+#include "SeedFinderOptions.hpp"
 #include "TestSeedAlgorithm.hpp"
 
+using namespace Acts::UnitLiterals;
 using namespace FW;
 
 int main(int argc, char* argv[]) {
@@ -41,12 +49,15 @@ int main(int argc, char* argv[]) {
   auto desc = Options::makeDefaultOptions();
   Options::addSequencerOptions(desc);
   Options::addInputOptions(desc);
+  Options::addRandomNumbersOptions(desc);
   Options::addOutputOptions(desc);
   Options::addGeometryOptions(desc);
   Options::addMaterialOptions(desc);
   detector.addOptions(desc);
   Options::addBFieldOptions(desc);
   Options::addCsvWriterOptions(desc);
+  Options::addSeedFinderOptions(desc);
+  Options::addMLOutput(desc);
 
   // parse options from command line flags
   auto vm = Options::parse(desc, argc, argv);
@@ -62,7 +73,8 @@ int main(int argc, char* argv[]) {
   auto logLevel = Options::readLogLevel(vm);
   auto inputDir = vm["input-dir"].as<std::string>();
   auto outputDir = ensureWritableDirectory(vm["output-dir"].as<std::string>());
-
+  auto rnd =
+      std::make_shared<FW::RandomNumbers>(Options::readRandomNumbersConfig(vm));
   // Setup detector geometry
   auto geometry = Geometry::build(vm, detector);
   auto trackingGeometry = geometry.first;
@@ -92,7 +104,12 @@ int main(int argc, char* argv[]) {
   const auto& inputParticles = particleReader.outputParticles;
 
   // add Seeding Algorithm that finds the seeds
+  bool outputIsML = Options::readMLOutputConfig(vm);
+  Acts::SeedfinderConfig<SpacePoint> seedFinderCfg =
+      Options::readSeedFinderConfig(vm);
   FW::TestSeedAlgorithm::Config testSeedCfg;
+  testSeedCfg.outputIsML = outputIsML;
+  testSeedCfg.seedFinderCfg = seedFinderCfg;
   testSeedCfg.inputHitParticlesMap = "hit_particles_map";
   testSeedCfg.inputSimulatedHits = "hits";
   testSeedCfg.inputDir = inputDir;
@@ -105,18 +122,89 @@ int main(int argc, char* argv[]) {
       std::make_shared<FW::TestSeedAlgorithm>(testSeedCfg, logLevel));
 
   FW::TrackSeedingPerformanceWriter::Config seedPerfCfg;
+  seedPerfCfg.outputIsML = outputIsML;
   seedPerfCfg.inputSeeds = testSeedCfg.outputSeeds;
   seedPerfCfg.inputProtoSeeds = testSeedCfg.outputProtoSeeds;
   seedPerfCfg.inputParticles = inputParticles;
   seedPerfCfg.inputClusters = testSeedCfg.inputClusters;
   seedPerfCfg.inputHitParticlesMap = clusterReaderCfg.outputHitParticlesMap;
   seedPerfCfg.outputDir = outputDir;
-  seedPerfCfg.etaMin = -2.7;
-  seedPerfCfg.etaMax = 2.7;
+  seedPerfCfg.etaMin = -2.5;
+  seedPerfCfg.etaMax = 2.5;
   seedPerfCfg.ptMin = 0.5;
   sequencer.addWriter(
       std::make_shared<TrackSeedingPerformanceWriter>(seedPerfCfg, logLevel));
 
+  // --------------------------------------------------------------------
+  // Connect to track Finder                                            |
+  // --------------------------------------------------------------------
+  /*
+    // Create smeared measurements
+    HitSmearing::Config hitSmearingCfg;
+    hitSmearingCfg.inputSimulatedHits = clusterReaderCfg.outputSimulatedHits;
+    hitSmearingCfg.outputSourceLinks = "sourcelinks";
+    hitSmearingCfg.sigmaLoc0 = 25_um;
+    hitSmearingCfg.sigmaLoc1 = 100_um;
+    hitSmearingCfg.randomNumbers = rnd;
+    hitSmearingCfg.trackingGeometry = trackingGeometry;
+    sequencer.addAlgorithm(
+        std::make_shared<HitSmearing>(hitSmearingCfg, logLevel));
+    // Create smeared particles states
+    ParticleSmearing::Config particleSmearingCfg;
+    particleSmearingCfg.inputParticles = inputParticles;
+    particleSmearingCfg.outputTrackParameters = "smearedparameters";
+    particleSmearingCfg.randomNumbers = rnd;
+    // Gaussian sigmas to smear particle parameters
+    particleSmearingCfg.sigmaD0 = 20_um;
+    particleSmearingCfg.sigmaD0PtA = 30_um;
+    particleSmearingCfg.sigmaD0PtB = 0.3 / 1_GeV;
+    particleSmearingCfg.sigmaZ0 = 20_um;
+    particleSmearingCfg.sigmaZ0PtA = 30_um;
+    particleSmearingCfg.sigmaZ0PtB = 0.3 / 1_GeV;
+    particleSmearingCfg.sigmaPhi = 1_degree;
+    particleSmearingCfg.sigmaTheta = 1_degree;
+    particleSmearingCfg.sigmaPRel = 0.01;
+    particleSmearingCfg.sigmaT0 = 1_ns;
+    sequencer.addAlgorithm(
+        std::make_shared<ParticleSmearing>(particleSmearingCfg, logLevel));
+
+    // setup the fitter
+    FittingAlgorithm::Config fitter;
+    fitter.inputSourceLinks = hitSmearingCfg.outputSourceLinks;
+    fitter.inputProtoTracks = testSeedCfg.outputProtoSeeds;
+    fitter.inputInitialTrackParameters =
+        particleSmearingCfg.outputTrackParameters;
+    fitter.outputTrajectories = "trajectories";
+    fitter.fit = FittingAlgorithm::makeFitterFunction(trackingGeometry,
+                                                      magneticField, logLevel);
+    sequencer.addAlgorithm(std::make_shared<FittingAlgorithm>(fitter,
+    logLevel));
+
+    // write tracks from fitting
+    RootTrajectoryWriter::Config trackWriter;
+    trackWriter.inputParticles = inputParticles;
+    trackWriter.inputTrajectories = fitter.outputTrajectories;
+    trackWriter.outputDir = outputDir;
+    trackWriter.outputFilename = "tracks.root";
+    trackWriter.outputTreename = "tracks";
+    sequencer.addWriter(
+        std::make_shared<RootTrajectoryWriter>(trackWriter, logLevel));
+
+    // write reconstruction performance data
+    TrackFinderPerformanceWriter::Config perfFinder;
+    perfFinder.inputParticles = inputParticles;
+    perfFinder.inputHitParticlesMap = clusterReaderCfg.outputHitParticlesMap;
+    perfFinder.inputProtoTracks = testSeedCfg.outputProtoSeeds;
+    perfFinder.outputDir = outputDir;
+    sequencer.addWriter(
+        std::make_shared<TrackFinderPerformanceWriter>(perfFinder, logLevel));
+    TrackFitterPerformanceWriter::Config perfFitter;
+    perfFitter.inputParticles = inputParticles;
+    perfFitter.inputTrajectories = fitter.outputTrajectories;
+    perfFitter.outputDir = outputDir;
+    sequencer.addWriter(
+        std::make_shared<TrackFitterPerformanceWriter>(perfFitter, logLevel));
+  */
   // Run all configured algorithms and return the appropriate status.
   return sequencer.run();
 }

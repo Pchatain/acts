@@ -9,6 +9,7 @@
 #pragma once
 
 #include "ACTFW/Validation/ProtoTrackClassification.hpp"
+#include "Acts/Geometry/GeometryID.hpp"
 
 struct SpacePoint {
   size_t m_Id;
