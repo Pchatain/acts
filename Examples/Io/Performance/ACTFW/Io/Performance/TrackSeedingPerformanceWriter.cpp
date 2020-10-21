@@ -545,6 +545,7 @@ void FW::TrackSeedingPerformanceWriter::writePlots(
               << (float)(10000 * qualityCutFoundPrts / (qualityCutPrts)) / 100.
               << std::endl;
     std::cout << m_impl->cfg.mlTag << "true" << nTrueSeeds << std::endl;
+    std::cout << m_impl->cfg.mlTag << "dup" << nDuplicateSeeds << std::endl;
   } else {
     ACTS_INFO("Number of seeds generated: " << nSeeds)
     ACTS_INFO("Number of true seeds generated: " << nTrueSeeds)
