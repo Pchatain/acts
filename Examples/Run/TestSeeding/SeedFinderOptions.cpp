@@ -1,5 +1,6 @@
 #include "SeedFinderOptions.hpp"
 
+#include "ACTFW/Io/Performance/TrackSeedingPerformanceWriter.hpp"
 #include "ACTFW/Utilities/Options.hpp"
 #include "Acts/Seeding/Seedfinder.hpp"
 
@@ -25,7 +26,8 @@ void FW::Options::addSeedFinderOptions(
       "How many sigmas of scattering to include in seeds")(
       "sf-maxSeedsPerSpM", value<size_t>(),
       "How many seeds can share one middle SpacePoint")(
-      "sf-collisionRegionMin", value<float>(), "limiting location of collision region in z in mm")(
+      "sf-collisionRegionMin", value<float>(),
+      "limiting location of collision region in z in mm")(
       "sf-collisionRegionMax", value<float>(),
       "limiting location of collision region in z in mm")(
       "sf-zMin", value<float>(),
@@ -38,21 +40,66 @@ void FW::Options::addSeedFinderOptions(
       "Min radius of Space Points included in algorithm in mm")(
       "sf-bFieldInZ", value<float>(), "Magnetic field strength in kiloTesla")(
       "sf-beamPos", value<read_range>()->multitoken()->default_value({0., 0.}),
-      "(x, y) position of the beam to offset Space Points")("sf-maxPt", value<float>(), "maximum Pt for scattering cut")(
-        "sf-radLengthPerSeed", value<float>(), "Average radiation length"
-      );
+      "(x, y) position of the beam to offset Space Points")(
+      "sf-maxPt", value<float>(), "maximum Pt for scattering cut")(
+      "sf-radLengthPerSeed", value<float>(), "Average radiation length");
 }
 
-void FW::Options::addMLOutput(boost::program_options::options_description& opt) {
-  opt.add_options()("output-ML", value<bool>(), "True if we want output to be ML friendly");
+void FW::Options::addSeedPerfOptions(
+    boost::program_options::options_description& opt) {
+  opt.add_options()("sf-fltPrtEtaMin", value<float>(),
+                    "Min eta for particle in efficiency calculation")(
+      "sf-fltPrtEtaMax", value<float>(),
+      "Max eta for particle in efficiency calculation")(
+      "sf-fltPrtPtMin", value<float>(),
+      "Min transverse momentum for particles in efficiency calculation")(
+      "sf-fltPrt3Hits", value<bool>(),
+      "Whether to filter particles based on if they have 3 hits in pixel "
+      "layers")("sf-fltPrtOuterHits", value<bool>(),
+                "Whether to filter particles based on if they have hits in "
+                "outer detector")(
+      "sf-fltPrtPtMax", value<float>(),
+      "Max transverse momentum for particles in efficiency calculation");
 }
 
-bool FW::Options::readMLOutputConfig(const boost::program_options::variables_map& vm) {
+void FW::Options::addMLOutput(
+    boost::program_options::options_description& opt) {
+  opt.add_options()("output-ML", value<bool>(),
+                    "True if we want output to be ML friendly");
+}
+
+bool FW::Options::readMLOutputConfig(
+    const boost::program_options::variables_map& vm) {
   bool outputIsML = false;
   if (vm.count("output-ML")) {
     outputIsML = vm["output-ML"].as<bool>();
   }
   return outputIsML;
+}
+
+// Read the seed performance config
+FW::TrackSeedingPerformanceWriter::Config FW::Options::readSeedPerfConfig(
+    const boost::program_options::variables_map& vm) {
+  FW::TrackSeedingPerformanceWriter::Config cfg;
+  if (vm.count("sf-fltPrtEtaMin")) {
+    cfg.etaMin = vm["sf-fltPrtEtaMin"].as<float>();
+  }
+  if (vm.count("sf-fltPrtEtaMax")) {
+    cfg.etaMax = vm["sf-fltPrtEtaMax"].as<float>();
+  }
+  if (vm.count("sf-fltPrtPtMin")) {
+    cfg.ptMin = vm["sf-fltPrtPtMin"].as<float>();
+  }
+  if (vm.count("sf-fltPrtPtMax")) {
+    cfg.ptMax = vm["sf-fltPrtPtMax"].as<float>();
+  }
+  if (vm.count("sf-fltPrt3Hits")) {
+    cfg.fltPrt3Hits = vm["sf-fltPrt3Hits"].as<bool>();
+  }
+  if (vm.count("sf-fltPrtOuterHits")) {
+    cfg.fltPrtOuterHits = vm["sf-fltPrtOuterHits"].as<bool>();
+  }
+  return cfg;
 }
 
 // Read the seed finder config.

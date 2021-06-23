@@ -10,6 +10,8 @@
 
 #include "ACTFW/Framework/RandomNumbers.hpp"
 #include "ACTFW/Framework/Sequencer.hpp"
+#include "Acts/Seeding/Seedfinder.hpp"
+#include "Acts/Seeding/SpacePoint.hpp"
 #include <Acts/Utilities/Logger.hpp>
 
 #include <string>

@@ -5,6 +5,7 @@ add_library(
   src/CsvParticleReader.cpp
   src/CsvParticleWriter.cpp
   src/CsvPlanarClusterReader.cpp
+  src/CsvSpacePointReader.cpp
   src/CsvPlanarClusterWriter.cpp
   src/CsvTrackingGeometryWriter.cpp)
 target_include_directories(

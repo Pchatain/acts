@@ -47,6 +47,10 @@ class TestSeedAlgorithm : public FW::BareAlgorithm {
     Acts::SeedfinderConfig<SpacePoint> seedFinderCfg;
     // Controls whether to print out ML friendly output
     bool outputIsML = false;
+    // potentially has input space points from csv readers
+    std::string inputSpacePoints;
+    //  controls whether we are given space points or clusters
+    bool inputIsSPs = true;
   };
 
   TestSeedAlgorithm(const Config& cfg, Acts::Logging::Level level);

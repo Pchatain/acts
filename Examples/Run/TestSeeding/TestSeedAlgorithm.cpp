@@ -16,7 +16,7 @@
 #include "ACTFW/EventData/SimParticle.hpp"
 #include "ACTFW/EventData/SimVertex.hpp"
 #include "ACTFW/Framework/WhiteBoard.hpp"
-#include "ACTFW/Io/Csv/CsvPlanarClusterReader.hpp"
+#include "ACTFW/Io/Csv/CsvSpacePointReader.hpp"
 #include "ACTFW/Utilities/Range.hpp"
 #include "ACTFW/Validation/ProtoTrackClassification.hpp"
 #include "Acts/Plugins/Digitization/PlanarModuleCluster.hpp"
@@ -52,18 +52,26 @@ FW::TestSeedAlgorithm::TestSeedAlgorithm(
     : FW::BareAlgorithm("TestSeedAlgorithm", level), m_cfg(std::move(cfg)) {
   // Is inputClusters already checked by base constructor?
   // I think this is only true for the writer
-  if (m_cfg.inputClusters.empty()) {
-    throw std::invalid_argument(
-        "Missing clusters input collection with the hits");
-  }
+
   if (m_cfg.inputHitParticlesMap.empty()) {
     throw std::invalid_argument("Missing hit-particles map input collection");
   }
   if (m_cfg.outputSeeds.empty()) {
     throw std::invalid_argument("Missing output collection for seeds");
   }
-  if (m_cfg.inputParticles.empty()) {
-    throw std::invalid_argument("Missing input particles collection");
+  if (m_cfg.inputIsSPs) {  // check for space poiints if we are reading in space
+                           // points.
+    if (m_cfg.inputSpacePoints.empty()) {
+      throw std::invalid_argument("Missing input space points");
+    }
+  } else {  // only check for these if we actually plan on using them
+    if (m_cfg.inputParticles.empty()) {
+      throw std::invalid_argument("Missing input particles collection");
+    }
+    if (m_cfg.inputClusters.empty()) {
+      throw std::invalid_argument(
+          "Missing clusters input collection with the hits");
+    }
   }
 }
 
@@ -121,11 +129,8 @@ ProtoTrack FW::TestSeedAlgorithm::seedToProtoTrack(
 
 FW::ProcessCode FW::TestSeedAlgorithm::execute(
     const AlgorithmContext& ctx) const {
-  // read in the hits
-  const auto& clusters =
-      ctx.eventStore.get<FW::GeometryIdMultimap<Acts::PlanarModuleCluster>>(
-          m_cfg.inputClusters);
   // read in the map of hitId to particleId truth information
+  ACTS_DEBUG("About to retrieve hitParticles Mao")
   const HitParticlesMap hitParticlesMap =
       ctx.eventStore.get<HitParticlesMap>(m_cfg.inputHitParticlesMap);
   const auto& particleHitsMap = invertIndexMultimap(hitParticlesMap);
@@ -142,25 +147,42 @@ FW::ProcessCode FW::TestSeedAlgorithm::execute(
   // since clusters are ordered, we simply count the hit_id as we read
   // clusters. Hit_id isn't stored in a cluster. This is how
   // CsvPlanarClusterWriter did it.
-  std::size_t hit_id = 0;
-  for (const auto& entry : clusters) {
-    Acts::GeometryID geoId = entry.first;
-    const Acts::PlanarModuleCluster& cluster = entry.second;
-    std::size_t volumeId = geoId.volume();
-    std::size_t layerId = geoId.layer();
+  std::size_t nSpacePoints = 0;
+  if (!m_cfg.inputIsSPs) {
+    // read in the hits
+    const auto& clusters =
+        ctx.eventStore.get<FW::GeometryIdMultimap<Acts::PlanarModuleCluster>>(
+            m_cfg.inputClusters);
+    std::size_t hit_id = 0;
+    for (const auto& entry : clusters) {
+      Acts::GeometryID geoId = entry.first;
+      const Acts::PlanarModuleCluster& cluster = entry.second;
+      std::size_t volumeId = geoId.volume();
+      std::size_t layerId = geoId.layer();
 
-    // filter out hits that aren't part of the volumes and layers track seeding
-    // is supposed to work on.
-    if (volumeId == 8) {
-      SpacePoint* SP = readSP(hit_id, geoId, cluster, hitParticlesMap, ctx);
-      spVec.push_back(SP);
-      clustCounter++;
+      // filter out hits that aren't part of the volumes and layers track
+      // seeding is supposed to work on.
+      if (volumeId == 8) {
+        SpacePoint* SP = readSP(hit_id, geoId, cluster, hitParticlesMap, ctx);
+        spVec.push_back(SP);
+        clustCounter++;
 
-    } else {
-      nIgnored++;
+      } else {
+        nIgnored++;
+      }
+      hit_id++;
     }
-    hit_id++;
+  } else {
+    const auto& spVecRaw =
+        ctx.eventStore.get<std::vector<SpacePoint>>(m_cfg.inputSpacePoints);
+    ACTS_DEBUG("got the space points raw")
+    for (const auto& sp : spVecRaw) {
+      spVec.push_back(&sp);
+      nSpacePoints++;
+    }
+    ACTS_DEBUG("We are made the space point vector")
   }
+  ACTS_DEBUG("We have " << nSpacePoints << " space points we are considering");
 
   // set up the cuts applied to seed finder algorithm
   Acts::SeedfinderConfig<SpacePoint> config = m_cfg.seedFinderCfg; /*
@@ -230,8 +252,11 @@ FW::ProcessCode FW::TestSeedAlgorithm::execute(
   std::vector<std::vector<Acts::Seed<SpacePoint>>> seedVector;
   ACTS_DEBUG("Briana")
   auto start = std::chrono::system_clock::now();
+  ACTS_DEBUG("Peter")
   auto groupIt = spGroup.begin();
+  ACTS_DEBUG("James")
   auto endOfGroups = spGroup.end();
+  ACTS_DEBUG("Charlie")
   if (groupIt == endOfGroups) {
     ACTS_DEBUG("The grid is empty")
   } else {
@@ -242,18 +267,20 @@ FW::ProcessCode FW::TestSeedAlgorithm::execute(
           groupIt.bottom(), groupIt.middle(), groupIt.top()));
     }
   }
+  ACTS_DEBUG("MArk")
   auto end = std::chrono::system_clock::now();
   std::chrono::duration<double> elapsed_seconds = end - start;
   if (m_cfg.outputIsML) {
     std::cout << "mlTag"
-              << "time" << elapsed_seconds.count() << std::endl;
-  } else {
-    ACTS_INFO("Time to create seeds: " << elapsed_seconds.count() << "s")
-    ACTS_DEBUG("Number of regions: " << seedVector.size())
-    ACTS_INFO("Number of hits used is: " << clustCounter << " --- "
-                                         << 100 * clustCounter / nHitsTotal
-                                         << "% usage")  // some of the hits
+              << ","
+              << "time"
+              << "," << elapsed_seconds.count() << std::endl;
   }
+  ACTS_INFO("Time to create seeds: " << elapsed_seconds.count() << "s")
+  ACTS_DEBUG("Number of regions: " << seedVector.size())
+  ACTS_INFO("Number of hits used is: " << clustCounter << " --- "
+                                       << 100 * clustCounter / nHitsTotal
+                                       << "% usage")  // some of the hits
 
   ProtoTrackContainer seeds;
   seeds.reserve(seedVector.size());
@@ -271,6 +298,7 @@ FW::ProcessCode FW::TestSeedAlgorithm::execute(
   if (seedVector.empty()) {
     ACTS_DEBUG("Seed vector is empty")
   }
+  ACTS_DEBUG("Finished testSeedAlgo, now storing outputSeeds")
   // store proto tracks to be analyzed by TrackFindingPerforrmanceWriter
   ctx.eventStore.add(m_cfg.outputProtoSeeds, std::move(seeds));
   // store seeds to be analyzed by TrackSeedingPerformanceWriter

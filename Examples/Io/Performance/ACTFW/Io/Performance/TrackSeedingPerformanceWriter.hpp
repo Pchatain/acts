@@ -56,9 +56,15 @@ class TrackSeedingPerformanceWriter final
     std::string outputFilename = "performance_track_seeding.root";
     // Controls whether to print out ML friendly output
     bool outputIsML = false;
+    // Controls whether to read in data from ITK dataset
+    bool inputITK = true;
     // Tag for whether a line is ML output
     std::string mlTag = "mlTag";
     // The quality cuts to be applied when evaluating seed finder efficiency
+    /// Whether to filter particles based on if they have 3 hits in pixel layers
+    bool fltPrt3Hits = true;
+    /// Wehther to filter particles based on if they have hits in outer detector
+    bool fltPrtOuterHits = true;
     /// Maximum distance from the origin in the transverse plane
     double rhoMax = std::numeric_limits<double>::max();
     /// Maximum absolute distance from the origin along z

@@ -382,12 +382,16 @@ bool FW::TrackSeedingPerformanceWriter::prtFindable(
            within(nHits, m_impl->cfg.nHitsMin, m_impl->cfg.nHitsMax) and
            (m_impl->cfg.keepNeutral or (p.charge() != 0));
   };
-
+  // ACTS_DEBUG("pT is " << prt.transverseMomentum() << ". And ptMin "
+  //                     << m_impl->cfg.ptMin)
   auto prtHits = makeRange(particleHitsMap.equal_range(prt.particleId()));
   bool hasOuterHit = false;
   size_t innerHitCount = 0;
   bool hasGreenHit = false;
-
+  if (m_impl->cfg.inputITK) {  // we don't have cluster information so we don't
+                               // support cluster filtering
+    return isValidparticle(prt);
+  }
   for (const auto& prtHit : prtHits) {
     size_t hit_id = prtHit.second;
     const auto& entry = clusters.begin() + hit_id;  // hit_id is 0-indexed
@@ -406,7 +410,21 @@ bool FW::TrackSeedingPerformanceWriter::prtFindable(
     }
   }
   bool has3InnerHit = innerHitCount >= 3;
-  return has3InnerHit && hasGreenHit && hasOuterHit && isValidparticle(prt);
+  bool ret = (has3InnerHit || !m_impl->cfg.fltPrt3Hits) &&
+             ((hasGreenHit && hasOuterHit) || !m_impl->cfg.fltPrtOuterHits) &&
+             isValidparticle(prt);
+  // if (!ret) {
+  //   ACTS_DEBUG("has3inner " << has3InnerHit << ". and setting is "
+  //                           << m_impl->cfg.fltPrt3Hits << ". fltOuter "
+  //                           << (hasGreenHit && hasOuterHit) << ", and setting
+  //                           "
+  //                           << m_impl->cfg.fltPrtOuterHits << ". is validPrt
+  //                           "
+  //                           << isValidparticle(prt))
+  // }
+  return (has3InnerHit || !m_impl->cfg.fltPrt3Hits) &&
+         ((hasGreenHit && hasOuterHit) || !m_impl->cfg.fltPrtOuterHits) &&
+         isValidparticle(prt);
 }
 
 std::set<ActsFatras::Barcode>
@@ -473,6 +491,7 @@ void FW::TrackSeedingPerformanceWriter::writePlots(
     const IndexMultimap<ActsFatras::Barcode>& hitParticlesMap,
     const SimParticleContainer& particles,
     const FW::GeometryIdMultimap<Acts::PlanarModuleCluster>& clusters) {
+  ACTS_DEBUG("We got to the writePlots for performance writer")
   const auto& particleHitsMap = invertIndexMultimap(hitParticlesMap);
   // Exclusive access to the tree while writing
   std::lock_guard<std::mutex> lock(m_writeMutex);
@@ -492,6 +511,7 @@ void FW::TrackSeedingPerformanceWriter::writePlots(
           analyzeSeed(seed, hitParticlesMap, truthCount, fakeCount);
     }
   }
+  ACTS_DEBUG("We analyzed the seeds")
   size_t numPtAbove25 = 0;
   if (!m_impl->cfg.outputIsML) {
     // Fill the Efficiency and fake rate plots
@@ -533,39 +553,45 @@ void FW::TrackSeedingPerformanceWriter::writePlots(
       nDuplicateSeeds += tc.second - 1;
     }
   }
+  ACTS_DEBUG("We called prtFindable at least once")
   for (const auto& particle : particles) {
     if (prtFindable(particle, particleHitsMap, clusters)) {
       qualityCutPrts++;
     }
   }
+  ACTS_DEBUG("we called prtFindable again")
   size_t nParticles = particles.size();
-  if (m_impl->cfg.outputIsML) {
-    std::cout << m_impl->cfg.mlTag << "seeds" << nSeeds << std::endl;
-    std::cout << m_impl->cfg.mlTag << "eff"
-              << (float)(10000 * qualityCutFoundPrts / (qualityCutPrts)) / 100.
-              << std::endl;
-    std::cout << m_impl->cfg.mlTag << "true" << nTrueSeeds << std::endl;
-    std::cout << m_impl->cfg.mlTag << "dup" << nDuplicateSeeds << std::endl;
-  } else {
-    ACTS_INFO("Number of seeds generated: " << nSeeds)
-    ACTS_INFO("Number of true seeds generated: " << nTrueSeeds)
-
-    ACTS_INFO("Number of duplicate seeds generated: " << nDuplicateSeeds)
-    ACTS_INFO(
-        "Technical Efficiency (nTrueSeeds - nDuplicateSeeds / nSeeds) --- "
-        << 100 * (nTrueSeeds - nDuplicateSeeds) / nSeeds << "%")
-    ACTS_INFO("Raw Efficiency: (particles matched to truth) / nParticles = "
-              << foundParticles << " / " << nParticles << " = "
-              << 100 * foundParticles / nParticles << "%")
-    ACTS_INFO("Fake rate (nSeeds - nTrueSeeds) / nSeeds --- "
-              << (100 * (nSeeds - nTrueSeeds)) / nSeeds << "%")
-    ACTS_INFO("Duplicate rate (nDuplicateSeeds / nSeeds) --- "
-              << (100 * nDuplicateSeeds) / nSeeds << "%")
-    ACTS_INFO("Efficiency "
-              << qualityCutFoundPrts << "/" << qualityCutPrts << " = "
-              << 100 * qualityCutFoundPrts / (qualityCutPrts) << "%")
-    ACTS_DEBUG("Number of particles with absP > 25 = " << numPtAbove25)
+  if (qualityCutPrts == 0) {
+    std::cout << "No particless exist in this pT range" << std::endl;
+  } else if (nSeeds == 0) {
+    ACTS_INFO("No seeds Found")
   }
+  if (m_impl->cfg.outputIsML) {
+    std::cout << m_impl->cfg.mlTag << ","
+              << "seeds" << nSeeds << ","
+              << "eff"
+              << (float)(10000 * qualityCutFoundPrts / (qualityCutPrts)) / 100.0
+              << ","
+              << "true" << nTrueSeeds << ","
+              << "dup" << nDuplicateSeeds << std::endl;
+  }
+  ACTS_INFO("Number of seeds generated: " << nSeeds)
+  ACTS_INFO("Number of true seeds generated: " << nTrueSeeds)
+
+  ACTS_INFO("Number of duplicate seeds generated: " << nDuplicateSeeds)
+  ACTS_INFO("Technical Efficiency (nTrueSeeds - nDuplicateSeeds / nSeeds) --- "
+            << 100 * (nTrueSeeds - nDuplicateSeeds) / nSeeds << "%")
+  ACTS_INFO("Raw Efficiency: (particles matched to truth) / nParticles = "
+            << foundParticles << " / " << nParticles << " = "
+            << 100 * foundParticles / nParticles << "%")
+  ACTS_INFO("Fake rate (nSeeds - nTrueSeeds) / nSeeds --- "
+            << (100 * (nSeeds - nTrueSeeds)) / nSeeds << "%")
+  ACTS_INFO("Duplicate rate (nDuplicateSeeds / nSeeds) --- "
+            << (100 * nDuplicateSeeds) / nSeeds << "%")
+  ACTS_INFO(
+      "Efficiency " << qualityCutFoundPrts << "/" << qualityCutPrts << " = "
+                    << 100 * qualityCutFoundPrts / (qualityCutPrts) << "%")
+  ACTS_DEBUG("Number of particles with absP > 25 = " << numPtAbove25)
 }
 
 FW::ProcessCode FW::TrackSeedingPerformanceWriter::writeT(

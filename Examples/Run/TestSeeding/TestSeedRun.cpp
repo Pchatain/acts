@@ -15,8 +15,8 @@
 #include "ACTFW/Io/Csv/CsvOptionsReader.hpp"
 #include "ACTFW/Io/Csv/CsvOptionsWriter.hpp"
 #include "ACTFW/Io/Csv/CsvParticleReader.hpp"
-#include "ACTFW/Io/Csv/CsvPlanarClusterReader.hpp"
 #include "ACTFW/Io/Csv/CsvPlanarClusterWriter.hpp"
+#include "ACTFW/Io/Csv/CsvSpacePointReader.hpp"
 #include "ACTFW/Io/Performance/TrackFinderPerformanceWriter.hpp"
 #include "ACTFW/Io/Performance/TrackFitterPerformanceWriter.hpp"
 #include "ACTFW/Io/Performance/TrackSeedingPerformanceWriter.hpp"
@@ -58,6 +58,7 @@ int main(int argc, char* argv[]) {
   Options::addCsvWriterOptions(desc);
   Options::addSeedFinderOptions(desc);
   Options::addMLOutput(desc);
+  Options::addSeedPerfOptions(desc);
 
   // parse options from command line flags
   auto vm = Options::parse(desc, argc, argv);
@@ -85,6 +86,9 @@ int main(int argc, char* argv[]) {
   // Setup the magnetic field
   auto magneticField = Options::readBField(vm);
 
+  bool ITK = true;  // DECIDES WHETHER TO USE ITK DATASET FROM ATHENA AFTER
+                    // MODIFICATIONS I MADE
+
   // Read particles (initial states) and clusters from CSV files
   auto particleReader = Options::readCsvParticleReaderConfig(vm);
   particleReader.inputStem = "particles_initial";
@@ -98,8 +102,20 @@ int main(int argc, char* argv[]) {
   clusterReaderCfg.outputHitIds = "hit_ids";
   clusterReaderCfg.outputHitParticlesMap = "hit_particles_map";
   clusterReaderCfg.outputSimulatedHits = "hits";
-  sequencer.addReader(
-      std::make_shared<CsvPlanarClusterReader>(clusterReaderCfg, logLevel));
+  FW::CsvSpacePointReader::Config spacePointReaderCfg;
+  spacePointReaderCfg.inputDir = clusterReaderCfg.inputDir;
+  spacePointReaderCfg.outputSpacePoints = "space_points";
+  spacePointReaderCfg.outputClusters = "clusters";
+  spacePointReaderCfg.outputHitIds = "hit_ids";
+  spacePointReaderCfg.outputHitParticlesMap = "hit_particles_map";
+  if (!ITK) {
+    sequencer.addReader(
+        std::make_shared<CsvPlanarClusterReader>(clusterReaderCfg, logLevel));
+  } else {
+    // std::cout << "We added right reader" << std::endl;
+    sequencer.addReader(
+        std::make_shared<CsvSpacePointReader>(spacePointReaderCfg, logLevel));
+  }
 
   const auto& inputParticles = particleReader.outputParticles;
 
@@ -111,27 +127,30 @@ int main(int argc, char* argv[]) {
   testSeedCfg.outputIsML = outputIsML;
   testSeedCfg.seedFinderCfg = seedFinderCfg;
   testSeedCfg.inputHitParticlesMap = "hit_particles_map";
-  testSeedCfg.inputSimulatedHits = "hits";
+  // testSeedCfg.inputSimulatedHits = "hits";
   testSeedCfg.inputDir = inputDir;
   testSeedCfg.inputParticles = inputParticles;
   testSeedCfg.outputHitIds = "hit_ids";
   testSeedCfg.inputClusters = "clusters";
   testSeedCfg.outputSeeds = "output_seeds";
   testSeedCfg.outputProtoSeeds = "output_proto_seeds";
+  if (ITK) {
+    testSeedCfg.inputSpacePoints = spacePointReaderCfg.outputSpacePoints;
+  }
   sequencer.addAlgorithm(
       std::make_shared<FW::TestSeedAlgorithm>(testSeedCfg, logLevel));
 
-  FW::TrackSeedingPerformanceWriter::Config seedPerfCfg;
+  //   FW::TrackSeedingPerformanceWriter::Config
+  auto seedPerfCfg = Options::readSeedPerfConfig(vm);
+  // std::cout << "minPt is " << seedPerfCfg.ptMin << std::endl;
   seedPerfCfg.outputIsML = outputIsML;
   seedPerfCfg.inputSeeds = testSeedCfg.outputSeeds;
   seedPerfCfg.inputProtoSeeds = testSeedCfg.outputProtoSeeds;
   seedPerfCfg.inputParticles = inputParticles;
   seedPerfCfg.inputClusters = testSeedCfg.inputClusters;
-  seedPerfCfg.inputHitParticlesMap = clusterReaderCfg.outputHitParticlesMap;
+  seedPerfCfg.inputHitParticlesMap =
+      clusterReaderCfg.outputHitParticlesMap;  // same as for spreader
   seedPerfCfg.outputDir = outputDir;
-  seedPerfCfg.etaMin = -2.5;
-  seedPerfCfg.etaMax = 2.5;
-  seedPerfCfg.ptMin = 0.5;
   sequencer.addWriter(
       std::make_shared<TrackSeedingPerformanceWriter>(seedPerfCfg, logLevel));
 
